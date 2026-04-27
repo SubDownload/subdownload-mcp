@@ -5,9 +5,10 @@ SubDownload exposes YouTube as an MCP-native data source. Connect once via OAuth
 - **Hosted endpoint**: `https://api.subdownload.com/mcp`
 - **Homepage**: https://subdownload.com?utm_source=gthb_awesome_9jqqed&utm_medium=code&utm_campaign=Awesome
 - **Docs**: https://api.subdownload.com/docs/mcp
-- **Glama listing**: https://glama.ai/mcp/connectors/com.subdownload.api/sub-download
+- **Glama (connector)**: https://glama.ai/mcp/connectors/com.subdownload.api/sub-download
+- **Glama (server)**: https://glama.ai/mcp/servers/SubDownload/subdownload-mcp
 
-> This repo is documentation + manifest for a hosted SaaS MCP server. There is no local server to run — you connect to the hosted endpoint above.
+> The recommended setup is to point your MCP client directly at the hosted endpoint above and authenticate via OAuth — see "Quick connect" below. This repo also ships a thin stdio proxy (Node + Docker) for environments that prefer a local subprocess.
 
 ## Auth
 
@@ -71,6 +72,36 @@ The first time you use it, the client triggers OAuth and you sign in with Google
 ```
 
 Grab your API key from your [account page](https://subdownload.com/account).
+
+### Local stdio proxy (Docker / npm)
+
+For clients that prefer a subprocess transport, this repo ships a thin Node proxy that forwards `tools/call` to the hosted endpoint with your API key.
+
+```bash
+# Docker
+docker build -t subdownload-mcp .
+docker run --rm -i -e SUBDOWNLOAD_API_KEY=YOUR_API_KEY subdownload-mcp
+
+# Or via Node directly
+npm install
+SUBDOWNLOAD_API_KEY=YOUR_API_KEY npm start
+```
+
+Client config example:
+
+```json
+{
+  "mcpServers": {
+    "subdownload": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "-e", "SUBDOWNLOAD_API_KEY", "subdownload-mcp"],
+      "env": { "SUBDOWNLOAD_API_KEY": "YOUR_API_KEY" }
+    }
+  }
+}
+```
+
+Tool schemas are declared inline so introspection (`initialize`, `tools/list`) works without credentials; `tools/call` requires `SUBDOWNLOAD_API_KEY`.
 
 ## Pricing
 

@@ -1,0 +1,33 @@
+{
+  "name": "@subdownload/mcp",
+  "version": "1.0.0",
+  "description": "MCP proxy for SubDownload — YouTube knowledge base for AI agents",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "subdownload-mcp": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SubDownload/subdownload-mcp.git"
+  },
+  "homepage": "https://subdownload.com",
+  "keywords": [
+    "mcp",
+    "youtube",
+    "transcript",
+    "summary",
+    "knowledge-base",
+    "ai-agent"
+  ]
+}
