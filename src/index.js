@@ -8,6 +8,9 @@
  * tools/call forwards to the upstream endpoint with a Bearer token from
  * SUBDOWNLOAD_API_KEY.
  *
+ * Schemas mirror the upstream tool definitions exactly (parameter names,
+ * required fields, types) so calls round-trip without parameter remapping.
+ *
  * For most users it's simpler to point your MCP client directly at
  * https://api.subdownload.com/mcp with OAuth — see the project README.
  */
@@ -52,95 +55,112 @@ const TOOLS = [
   {
     name: "search_youtube",
     description:
-      "Search YouTube globally for videos matching a keyword query. Returns up to 25 results, each with video ID, title, channel name and ID, duration, view count, publish date, and thumbnail URL. Use this for topic-based discovery when the user has not specified a channel. For searching within a known channel, use search_channel_videos instead.",
-    annotations: { title: "Search YouTube videos", ...READ_OPEN },
+      "Search YouTube globally for videos, channels, or playlists on any topic. Returns up to 50 results with metadata. Use this for topic-based discovery when the user has not specified a channel — for searching within a known channel use search_channel_videos instead.",
+    annotations: { title: "Search YouTube", ...READ_OPEN },
     inputSchema: {
       type: "object",
       properties: {
-        query: {
+        q: {
           type: "string",
           description:
-            "Search keywords (e.g., 'rust async tutorial', 'lex fridman dario amodei'). Same syntax as YouTube's search bar.",
+            "Search query (same syntax as YouTube's search bar, e.g. 'rust async tutorial', 'lex fridman dario amodei').",
           minLength: 1,
         },
+        type: {
+          type: "string",
+          description:
+            "Search type: 'video', 'channel', or 'playlist'. Default: 'video'.",
+          enum: ["video", "channel", "playlist"],
+        },
         limit: {
-          type: "integer",
-          description: "Maximum number of results to return (default 10, max 25).",
+          type: "number",
+          description: "Max results (1-50, default 20).",
           minimum: 1,
-          maximum: 25,
+          maximum: 50,
         },
       },
-      required: ["query"],
+      required: ["q"],
     },
   },
   {
     name: "fetch_video_info",
     description:
-      "Fetch metadata for a single YouTube video by ID or URL. Returns title, channel, duration in seconds, view count, publish date, thumbnail, description, and whether captions are available. Does NOT include the transcript itself — call fetch_transcript or transcribe_video for that. Cheap and fast; safe to call repeatedly.",
+      "Fetch consolidated YouTube video metadata with numeric types — title, channel, duration, view count, publish date, thumbnail, description, captions availability. Does NOT include the transcript itself; call fetch_transcript or transcribe_video for that. Cheap, fast, free.",
     annotations: { title: "Get YouTube video metadata", ...READ_OPEN },
     inputSchema: {
       type: "object",
       properties: {
-        video_id_or_url: {
+        video_id: {
           type: "string",
           description:
-            "YouTube video ID (e.g., 'dQw4w9WgXcQ') or any YouTube URL form (watch URL, youtu.be short link, or shorts URL). Both formats are accepted.",
+            "11-char YouTube video ID (e.g. 'dQw4w9WgXcQ') or full URL (watch, youtu.be, shorts, embed, live).",
           minLength: 5,
         },
       },
-      required: ["video_id_or_url"],
+      required: ["video_id"],
     },
   },
   {
     name: "fetch_transcript",
     description:
-      "Fetch the existing official transcript (closed captions) of a YouTube video, with per-segment timestamps. Returns an array of segments shaped like `{ start, duration, text }` plus the detected language. Errors with `transcript_not_available` if the video has no captions — fall back to transcribe_video in that case to generate one with AI ASR. This call is free and does not consume credits.",
+      "Fetch the existing official transcript (subtitles/captions) of a YouTube video, with per-segment timestamps and language detected. Errors with NO_CAPTIONS if the video has no captions — fall back to transcribe_video in that case to generate one with AI ASR. This call is free.",
     annotations: { title: "Fetch YouTube transcript (existing captions)", ...READ_OPEN },
     inputSchema: {
       type: "object",
       properties: {
-        video_id_or_url: {
+        video_id: {
           type: "string",
-          description: "YouTube video ID or any URL form (watch / youtu.be / shorts).",
+          description: "YouTube video ID (e.g. 'dQw4w9WgXcQ') or full YouTube URL.",
           minLength: 5,
         },
-        language: {
+        lang: {
           type: "string",
           description:
-            "Optional ISO 639-1 language code to select among multilingual captions (e.g., 'en', 'zh', 'es', 'ja'). If omitted, the video's primary caption track is returned.",
+            "ISO 639-1 language code to select among multilingual captions (e.g. 'en', 'zh', 'ja'). Omit for the video's default language.",
+        },
+        save: {
+          type: "boolean",
+          description:
+            "When true, also save the video to the user's Library in the same call. Bookmarks the meta row and flips has_asr when the transcript was produced by our ASR. Does NOT upload a summary — use save_to_library with kind='summary' or kind='both' for that.",
         },
       },
-      required: ["video_id_or_url"],
+      required: ["video_id"],
     },
   },
   {
     name: "transcribe_video",
     description:
-      "Start an asynchronous AI ASR job to generate a transcript from a YouTube video's audio. Returns immediately with a `task_id`; the actual transcription typically completes in 10-60 seconds for short videos and a few minutes for long ones. Poll status with get_asr_task. Use this for videos that have no official captions — try fetch_transcript first when captions exist (it's faster and free). Costs 5 credits per video.",
+      "Start an asynchronous AI ASR (Whisper) transcription of a YouTube video. Returns immediately with a task_id and estimated_wait_seconds; the actual transcription runs in the background. Poll status with get_asr_task. Use this when fetch_transcript returned NO_CAPTIONS or when the video has no captions. Costs 5 credits, debited only on successful completion.",
     annotations: { title: "Start AI transcription job", ...ASYNC_OPEN },
     inputSchema: {
       type: "object",
       properties: {
-        video_id_or_url: {
+        video_url: {
           type: "string",
-          description: "YouTube video ID or any URL form. Caption-less videos benefit most from this tool.",
+          description:
+            "YouTube URL (watch, youtu.be, shorts, or embed form). Full URL preferred.",
           minLength: 5,
         },
+        lang: {
+          type: "string",
+          description:
+            "Optional language hint (ISO 639-1, e.g. 'en', 'zh'). Omit to auto-detect.",
+        },
       },
-      required: ["video_id_or_url"],
+      required: ["video_url"],
     },
   },
   {
     name: "get_asr_task",
     description:
-      "Check the status of an async AI transcription task started by transcribe_video. Returns a status string of `queued`, `downloading`, `transcribing`, `finalizing`, `done`, or `failed`. When status is `done`, the response also includes the full transcript with timestamps. Recommended polling interval: 3-5 seconds. Does not consume credits.",
+      "Poll the status of an ASR task created by transcribe_video. Returns one of `queued`, `downloading`, `transcribing`, `finalizing`, `done`, or `failed`. When status is `done`, includes the full transcript with timestamps. Recommended polling interval: 3-5 seconds. Free — does not consume credits.",
     annotations: { title: "Poll AI transcription status", ...READ_OPEN },
     inputSchema: {
       type: "object",
       properties: {
         task_id: {
           type: "string",
-          description: "Task ID returned from a previous transcribe_video call.",
+          description: "Task ID returned by transcribe_video.",
           minLength: 1,
         },
       },
@@ -150,147 +170,196 @@ const TOOLS = [
   {
     name: "resolve_channel",
     description:
-      "Look up a YouTube channel from any common identifier (handle like '@mkbhd', vanity URL, full channel URL, or raw channel ID starting with 'UC'). Returns the canonical channel ID, display name, handle, subscriber count, total video count, and avatar URL. Call this first when you only have a handle or URL but need a channel ID for the other channel-scoped tools.",
+      "Resolve a YouTube @handle, channel URL, video URL, or raw channel ID into canonical channel info (channel ID, name, handle, subscriber count, video count, avatar). Call this first when you only have a handle or URL but need a channel ID for the other channel-scoped tools.",
     annotations: { title: "Resolve YouTube channel identifier", ...READ_OPEN },
     inputSchema: {
       type: "object",
       properties: {
-        identifier: {
+        input: {
           type: "string",
           description:
-            "Channel identifier in any common form: handle (`@mkbhd`), vanity URL (`youtube.com/@mkbhd`), channel URL (`youtube.com/channel/UC...`), or raw channel ID (`UC...`).",
+            "@handle (e.g. '@MrBeast'), channel URL, video URL, or UC... channel ID. All common forms are accepted.",
           minLength: 1,
         },
       },
-      required: ["identifier"],
+      required: ["input"],
     },
   },
   {
     name: "list_channel_videos",
     description:
-      "List videos uploaded by a YouTube channel, ordered by publish date (newest first), with pagination. Returns up to 30 videos per page along with a `next_page_token` if more results exist. For just the most recent handful, prefer get_channel_latest_videos for simplicity.",
+      "List all videos from a YouTube channel ordered by publish date (newest first), with pagination. Returns up to 30 per page plus a `continuation` token if more results exist. For just the most recent handful, prefer get_channel_latest_videos for simplicity.",
     annotations: { title: "List videos on a channel (paginated)", ...READ_OPEN },
     inputSchema: {
       type: "object",
       properties: {
-        channel_id: {
+        channel: {
           type: "string",
-          description: "Canonical channel ID starting with 'UC' (use resolve_channel if you only have a handle).",
-          pattern: "^UC[A-Za-z0-9_-]+$",
+          description:
+            "@handle, channel URL, or UC... channel ID. Required for the first page; omit on subsequent pages and pass `continuation` instead.",
         },
-        page_token: {
+        continuation: {
           type: "string",
-          description: "Opaque pagination cursor from a previous response's `next_page_token`. Omit for the first page.",
+          description:
+            "Pagination token from a previous response's `continuation` field. Omit for the first page.",
         },
       },
-      required: ["channel_id"],
     },
   },
   {
     name: "get_channel_latest_videos",
     description:
-      "Get the N most recent videos from a YouTube channel. Convenience wrapper over list_channel_videos with no pagination — best for 'what did this creator publish recently?' style queries.",
+      "Get the most recent videos from a YouTube channel — convenience wrapper over list_channel_videos with no pagination. Best for 'what did this creator publish recently?' style queries.",
     annotations: { title: "Get channel's latest videos", ...READ_OPEN },
     inputSchema: {
       type: "object",
       properties: {
-        channel_id: {
+        channel: {
           type: "string",
-          description: "Canonical channel ID starting with 'UC'.",
-          pattern: "^UC[A-Za-z0-9_-]+$",
-        },
-        limit: {
-          type: "integer",
-          description: "Max number of recent videos to return (default 10, max 50).",
-          minimum: 1,
-          maximum: 50,
+          description: "@handle (e.g. '@mkbhd'), channel URL, or UC... channel ID.",
+          minLength: 1,
         },
       },
-      required: ["channel_id"],
+      required: ["channel"],
     },
   },
   {
     name: "search_channel_videos",
     description:
-      "Search videos within a single YouTube channel by keyword. Restricts results to the given channel_id. Use after resolve_channel if starting from a handle. Useful for queries like 'find Andrej Karpathy's video about backpropagation'.",
+      "Search for specific videos within a single YouTube channel. Restricts results to the given channel. Use after resolve_channel if starting from a handle. Useful for 'find Karpathy's video about backpropagation' style queries.",
     annotations: { title: "Search videos within a channel", ...READ_OPEN },
     inputSchema: {
       type: "object",
       properties: {
-        channel_id: {
+        channel: {
           type: "string",
-          description: "Canonical channel ID starting with 'UC'.",
-          pattern: "^UC[A-Za-z0-9_-]+$",
-        },
-        query: {
-          type: "string",
-          description: "Search keywords (matched against video title and description within the channel).",
+          description: "@handle, channel URL, or UC... channel ID.",
           minLength: 1,
         },
+        q: {
+          type: "string",
+          description: "Search query (matched against video title and description within the channel).",
+          minLength: 1,
+        },
+        limit: {
+          type: "number",
+          description: "Max results (1-50, default 30).",
+          minimum: 1,
+          maximum: 50,
+        },
       },
-      required: ["channel_id", "query"],
+      required: ["channel", "q"],
     },
   },
   {
     name: "list_playlist_videos",
     description:
-      "List the videos in a YouTube playlist in order. Returns video IDs, titles, durations, channel info, and position within the playlist. Works for any public or unlisted playlist that the playlist URL exposes.",
+      "List videos in a YouTube playlist in order, with pagination. Returns video metadata and position within the playlist. Works for any public or unlisted playlist exposed by its URL/ID.",
     annotations: { title: "List videos in a playlist", ...READ_OPEN },
     inputSchema: {
       type: "object",
       properties: {
-        playlist_id: {
+        playlist: {
           type: "string",
-          description: "YouTube playlist ID (typically starts with 'PL', 'UU', 'LL', or 'FL').",
-          minLength: 2,
+          description:
+            "Playlist URL or ID (typically starts with 'PL', 'UU', 'LL', or 'FL'). Required for the first page.",
+        },
+        continuation: {
+          type: "string",
+          description: "Pagination token from a previous response's `continuation` field. Omit for the first page.",
         },
       },
-      required: ["playlist_id"],
     },
   },
   {
     name: "save_to_library",
     description:
-      "Save a video to the authenticated user's personal SubDownload knowledge base for cross-session recall. If a transcript or AI summary already exists for this video, it is saved together; otherwise a stub entry is created and content can be filled in later. Idempotent: saving the same video twice updates the existing entry rather than duplicating. Optional `tags` for organization.",
-    annotations: { title: "Save a video to your knowledge base", ...WRITE_OPEN },
+      "Save a video to the authenticated user's Library. Three modes via `kind`: 'asr' bookmarks the video and flips has_asr (use after a successful transcribe_video → fetch_transcript flow); 'summary' uploads a summary blob; 'both' does both at once. Idempotent: saving the same video twice updates the existing entry.",
+    annotations: { title: "Save a video to your Library", ...WRITE_OPEN },
     inputSchema: {
       type: "object",
       properties: {
-        video_id_or_url: {
+        video_id: {
           type: "string",
-          description: "YouTube video ID or any URL form for the video being saved.",
+          description: "YouTube video ID (11 chars).",
           minLength: 5,
         },
-        tags: {
-          type: "array",
-          description: "Optional tags for organizing the saved item (e.g., ['ai', 'paper-review']).",
-          items: { type: "string", minLength: 1 },
+        kind: {
+          type: "string",
+          description:
+            "'asr' (bookmark + flip has_asr), 'summary' (upload summary text), or 'both'.",
+          enum: ["asr", "summary", "both"],
+        },
+        title: {
+          type: "string",
+          description: "Video title (for display in the user's Library list).",
+        },
+        author: {
+          type: "string",
+          description: "Channel / author name.",
+        },
+        thumbnail: {
+          type: "string",
+          description: "Thumbnail URL.",
+        },
+        video_url: {
+          type: "string",
+          description: "Full YouTube URL.",
+        },
+        language: {
+          type: "string",
+          description: "Video language code (ISO 639-1).",
+        },
+        text: {
+          type: "string",
+          description:
+            "Summary text. REQUIRED when kind='summary' or kind='both'. Plain text or markdown — use the `format` param to declare which.",
+        },
+        locale: {
+          type: "string",
+          description:
+            "Summary locale (e.g. 'en', 'zh'). Used with kind='summary' or kind='both'.",
+        },
+        format: {
+          type: "string",
+          description:
+            "Summary format: 'markdown' (default) or 'text'. Use 'markdown' if your text contains **bold**, bullets, headings, or code fences so the web UI renders it; use 'text' for plain prose.",
+          enum: ["markdown", "text"],
+        },
+        model: {
+          type: "string",
+          description: "Optional model identifier, e.g. 'claude-opus-4'.",
         },
       },
-      required: ["video_id_or_url"],
+      required: ["video_id", "kind"],
     },
   },
   {
     name: "list_library",
     description:
-      "Browse the authenticated user's saved SubDownload knowledge base. Supports free-text search across title and tags, exact tag filter, and pagination. Returns recently saved items first by default. Scoped to the calling user's data only — never exposes other users' libraries.",
-    annotations: { title: "Browse your knowledge base", ...READ_PRIVATE },
+      "List videos the user has saved to their Library (transcripts + summaries). Supports substring search on title/author, favorites filter, and pagination. Returns recently saved items first. Scoped to the calling user's data only.",
+    annotations: { title: "Browse your Library", ...READ_PRIVATE },
     inputSchema: {
       type: "object",
       properties: {
-        query: {
-          type: "string",
-          description: "Optional free-text search; matched against item title, channel, and tags.",
+        favorite: {
+          type: "boolean",
+          description: "When true, return only items the user has favorited.",
         },
-        tag: {
+        q: {
           type: "string",
-          description: "Optional exact-match tag filter (single tag).",
+          description: "Substring match on title and author.",
         },
         limit: {
-          type: "integer",
-          description: "Max items to return (default 20, max 100).",
+          type: "number",
+          description: "Max items per page (1-100, default 20).",
           minimum: 1,
           maximum: 100,
+        },
+        offset: {
+          type: "number",
+          description: "Pagination offset (number of items to skip).",
+          minimum: 0,
         },
       },
     },
@@ -298,18 +367,21 @@ const TOOLS = [
   {
     name: "get_library_item",
     description:
-      "Fetch a single saved knowledge base item by its ID, including the full video metadata, AI summary, transcript (if any), and user-applied tags. Use this after list_library returns matching items when you need the complete content rather than just the listing fields.",
-    annotations: { title: "Get knowledge base item", ...READ_PRIVATE },
+      "Read a saved Library item with its transcript and AI summary inline (when available). Use after list_library to fetch the full content the user saved. Free.",
+    annotations: { title: "Get Library item", ...READ_PRIVATE },
     inputSchema: {
       type: "object",
       properties: {
-        item_id: {
+        id: {
+          type: "number",
+          description: "Library item id (returned by list_library or save_to_library).",
+        },
+        locale: {
           type: "string",
-          description: "Library item ID (returned by list_library or save_to_library).",
-          minLength: 1,
+          description: "Summary locale to fetch (e.g. 'en', 'zh'). Defaults to 'en'.",
         },
       },
-      required: ["item_id"],
+      required: ["id"],
     },
   },
 ];
