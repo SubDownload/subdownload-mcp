@@ -26,29 +26,48 @@ const UPSTREAM_URL =
   process.env.SUBDOWNLOAD_MCP_URL || "https://api.subdownload.com/mcp";
 const API_KEY = process.env.SUBDOWNLOAD_API_KEY;
 
-const READ_OPEN = {
-  readOnlyHint: true,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: true,
-};
-const WRITE_OPEN = {
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: true,
-};
-const READ_PRIVATE = {
-  readOnlyHint: true,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: false,
-};
-const ASYNC_OPEN = {
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: false,
-  openWorldHint: true,
+// Annotation hints mirror the per-tool justifications in the upstream
+// manager (internal/handler/mcp.go). YouTube-facing reads are NOT idempotent
+// because YouTube returns different results over time (view counts change,
+// search results re-rank, channel metadata updates, etc.). Library reads
+// are NOT openWorld because they only touch our database.
+const ANN = {
+  // YouTube read paths — public data changes over time
+  YT_READ: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
+  // ASR job creation — coalesces on (video, lang) within cache TTL
+  ASR_START: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  // ASR poll — hits our backend only, status changes over time
+  ASR_POLL: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: false,
+  },
+  // Library read — user's private data, mutates as user saves/edits
+  LIB_READ: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: false,
+  },
+  // Library write — overwrites latest summary on same (video, locale),
+  // intended "latest-only" UX, not destructive
+  LIB_WRITE: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
 };
 
 const TOOLS = [
@@ -56,7 +75,7 @@ const TOOLS = [
     name: "search_youtube",
     description:
       "Search YouTube globally for videos, channels, or playlists on any topic. Returns up to 50 results with metadata. Use this for topic-based discovery when the user has not specified a channel — for searching within a known channel use search_channel_videos instead.",
-    annotations: { title: "Search YouTube", ...READ_OPEN },
+    annotations: { title: "Search YouTube", ...ANN.YT_READ },
     inputSchema: {
       type: "object",
       properties: {
@@ -86,7 +105,7 @@ const TOOLS = [
     name: "fetch_video_info",
     description:
       "Fetch consolidated YouTube video metadata with numeric types — title, channel, duration, view count, publish date, thumbnail, description, captions availability. Does NOT include the transcript itself; call fetch_transcript or transcribe_video for that. Cheap, fast, free.",
-    annotations: { title: "Get YouTube video metadata", ...READ_OPEN },
+    annotations: { title: "Fetch YouTube Video Info", ...ANN.YT_READ },
     inputSchema: {
       type: "object",
       properties: {
@@ -104,7 +123,7 @@ const TOOLS = [
     name: "fetch_transcript",
     description:
       "Fetch the existing official transcript (subtitles/captions) of a YouTube video, with per-segment timestamps and language detected. Errors with NO_CAPTIONS if the video has no captions — fall back to transcribe_video in that case to generate one with AI ASR. This call is free.",
-    annotations: { title: "Fetch YouTube transcript (existing captions)", ...READ_OPEN },
+    annotations: { title: "Fetch YouTube Video Transcript", ...ANN.YT_READ },
     inputSchema: {
       type: "object",
       properties: {
@@ -131,7 +150,7 @@ const TOOLS = [
     name: "transcribe_video",
     description:
       "Start an asynchronous AI ASR (Whisper) transcription of a YouTube video. Returns immediately with a task_id and estimated_wait_seconds; the actual transcription runs in the background. Poll status with get_asr_task. Use this when fetch_transcript returned NO_CAPTIONS or when the video has no captions. Costs 5 credits, debited only on successful completion.",
-    annotations: { title: "Start AI transcription job", ...ASYNC_OPEN },
+    annotations: { title: "Transcribe YouTube Video (Async)", ...ANN.ASR_START },
     inputSchema: {
       type: "object",
       properties: {
@@ -154,7 +173,7 @@ const TOOLS = [
     name: "get_asr_task",
     description:
       "Poll the status of an ASR task created by transcribe_video. Returns one of `queued`, `downloading`, `transcribing`, `finalizing`, `done`, or `failed`. When status is `done`, includes the full transcript with timestamps. Recommended polling interval: 3-5 seconds. Free — does not consume credits.",
-    annotations: { title: "Poll AI transcription status", ...READ_OPEN },
+    annotations: { title: "Get ASR Task Status", ...ANN.ASR_POLL },
     inputSchema: {
       type: "object",
       properties: {
@@ -171,7 +190,7 @@ const TOOLS = [
     name: "resolve_channel",
     description:
       "Resolve a YouTube @handle, channel URL, video URL, or raw channel ID into canonical channel info (channel ID, name, handle, subscriber count, video count, avatar). Call this first when you only have a handle or URL but need a channel ID for the other channel-scoped tools.",
-    annotations: { title: "Resolve YouTube channel identifier", ...READ_OPEN },
+    annotations: { title: "Resolve YouTube Channel", ...ANN.YT_READ },
     inputSchema: {
       type: "object",
       properties: {
@@ -189,7 +208,7 @@ const TOOLS = [
     name: "list_channel_videos",
     description:
       "List all videos from a YouTube channel ordered by publish date (newest first), with pagination. Returns up to 30 per page plus a `continuation` token if more results exist. For just the most recent handful, prefer get_channel_latest_videos for simplicity.",
-    annotations: { title: "List videos on a channel (paginated)", ...READ_OPEN },
+    annotations: { title: "List Channel Videos", ...ANN.YT_READ },
     inputSchema: {
       type: "object",
       properties: {
@@ -210,7 +229,7 @@ const TOOLS = [
     name: "get_channel_latest_videos",
     description:
       "Get the most recent videos from a YouTube channel — convenience wrapper over list_channel_videos with no pagination. Best for 'what did this creator publish recently?' style queries.",
-    annotations: { title: "Get channel's latest videos", ...READ_OPEN },
+    annotations: { title: "Get Channel Latest Videos", ...ANN.YT_READ },
     inputSchema: {
       type: "object",
       properties: {
@@ -227,7 +246,7 @@ const TOOLS = [
     name: "search_channel_videos",
     description:
       "Search for specific videos within a single YouTube channel. Restricts results to the given channel. Use after resolve_channel if starting from a handle. Useful for 'find Karpathy's video about backpropagation' style queries.",
-    annotations: { title: "Search videos within a channel", ...READ_OPEN },
+    annotations: { title: "Search Channel Videos", ...ANN.YT_READ },
     inputSchema: {
       type: "object",
       properties: {
@@ -255,7 +274,7 @@ const TOOLS = [
     name: "list_playlist_videos",
     description:
       "List videos in a YouTube playlist in order, with pagination. Returns video metadata and position within the playlist. Works for any public or unlisted playlist exposed by its URL/ID.",
-    annotations: { title: "List videos in a playlist", ...READ_OPEN },
+    annotations: { title: "List Playlist Videos", ...ANN.YT_READ },
     inputSchema: {
       type: "object",
       properties: {
@@ -275,7 +294,7 @@ const TOOLS = [
     name: "save_to_library",
     description:
       "Save a video to the authenticated user's Library. Three modes via `kind`: 'asr' bookmarks the video and flips has_asr (use after a successful transcribe_video → fetch_transcript flow); 'summary' uploads a summary blob; 'both' does both at once. Idempotent: saving the same video twice updates the existing entry.",
-    annotations: { title: "Save a video to your Library", ...WRITE_OPEN },
+    annotations: { title: "Save to Library", ...ANN.LIB_WRITE },
     inputSchema: {
       type: "object",
       properties: {
@@ -338,7 +357,7 @@ const TOOLS = [
     name: "list_library",
     description:
       "List videos the user has saved to their Library (transcripts + summaries). Supports substring search on title/author, favorites filter, and pagination. Returns recently saved items first. Scoped to the calling user's data only.",
-    annotations: { title: "Browse your Library", ...READ_PRIVATE },
+    annotations: { title: "List Saved Library", ...ANN.LIB_READ },
     inputSchema: {
       type: "object",
       properties: {
@@ -368,7 +387,7 @@ const TOOLS = [
     name: "get_library_item",
     description:
       "Read a saved Library item with its transcript and AI summary inline (when available). Use after list_library to fetch the full content the user saved. Free.",
-    annotations: { title: "Get Library item", ...READ_PRIVATE },
+    annotations: { title: "Get Library Item", ...ANN.LIB_READ },
     inputSchema: {
       type: "object",
       properties: {
